@@ -30,3 +30,4 @@ class Item(Base):
     location = relationship("Location", back_populates="items", foreign_keys=[location_id])
     home_location = relationship("Location", foreign_keys=[home_location_id])
     family = relationship("Family", back_populates="items")
+    photos = relationship("ItemPhoto", back_populates="item", cascade="all, delete-orphan")

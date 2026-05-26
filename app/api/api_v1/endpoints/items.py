@@ -1,13 +1,19 @@
+from datetime import datetime
 from typing import Any, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, Depends, Header, HTTPException, status, UploadFile, File
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.services.item_service import item_service
 from app.repositories.item import item_repo
+from app.repositories.idempotency_record import idempotency_repo
 from app.repositories.location import location_repo
 from app.schemas.item import ItemCreate, ItemCreateResponse, ItemUpdate, ItemResponse
+from app.schemas.item_photo import ItemPhotoResponse
 from app.core.ai_client import get_ai_client
+from app.services.item_photo_service import item_photo_service
 
 router = APIRouter()
 
@@ -78,21 +84,101 @@ def create_item(
     *,
     db: Session = Depends(deps.get_db),
     family_id: int = Depends(deps.get_current_family),
-    item_in: ItemCreate
+    item_in: ItemCreate,
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
     """
     录入新物品，绑定至特定收纳空间。
     """
     try:
+        if idempotency_key:
+            record = idempotency_repo.get(
+                db,
+                family_id=family_id,
+                operation="create_item",
+                key=idempotency_key,
+            )
+            if record:
+                return JSONResponse(
+                    status_code=record.status_code,
+                    content=record.response_body,
+                )
+
         item = item_service.create_item(db, obj_in=item_in, family_id=family_id)
-        return {
+        response_body = jsonable_encoder({
             "item": item,
             "location_path": location_repo.get_ancestor_path(
                 db, location_id=item.location_id
             ),
-        }
+        })
+        if idempotency_key:
+            idempotency_repo.create(
+                db,
+                family_id=family_id,
+                operation="create_item",
+                key=idempotency_key,
+                status_code=status.HTTP_201_CREATED,
+                response_body=response_body,
+            )
+        return response_body
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        error_message = str(e)
+        if "不存在或越权访问" in error_message:
+            raise HTTPException(status_code=404, detail=error_message)
+        raise HTTPException(status_code=400, detail=error_message)
+
+
+@router.post("/{item_id}/photos", response_model=ItemPhotoResponse, status_code=status.HTTP_201_CREATED)
+async def upload_item_photo(
+    *,
+    db: Session = Depends(deps.get_db),
+    family_id: int = Depends(deps.get_current_family),
+    item_id: int,
+    file: UploadFile = File(...),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+) -> Any:
+    """
+    为当前家庭的物品上传图片，图片内容由后端存储管理。
+    """
+    try:
+        if idempotency_key:
+            record = idempotency_repo.get(
+                db,
+                family_id=family_id,
+                operation=f"upload_item_photo:{item_id}",
+                key=idempotency_key,
+            )
+            if record:
+                return JSONResponse(
+                    status_code=record.status_code,
+                    content=record.response_body,
+                )
+
+        content = await file.read()
+        photo = item_photo_service.create_photo(
+            db,
+            item_id=item_id,
+            family_id=family_id,
+            filename=file.filename or "photo",
+            mime_type=file.content_type or "",
+            content=content,
+        )
+        response_body = jsonable_encoder(photo)
+        if idempotency_key:
+            idempotency_repo.create(
+                db,
+                family_id=family_id,
+                operation=f"upload_item_photo:{item_id}",
+                key=idempotency_key,
+                status_code=status.HTTP_201_CREATED,
+                response_body=response_body,
+            )
+        return response_body
+    except ValueError as e:
+        error_message = str(e)
+        if "不存在或越权访问" in error_message:
+            raise HTTPException(status_code=404, detail=error_message)
+        raise HTTPException(status_code=400, detail=error_message)
 
 
 @router.get("/{item_id}", response_model=ItemResponse)
@@ -117,13 +203,23 @@ def update_item(
     db: Session = Depends(deps.get_db),
     family_id: int = Depends(deps.get_current_family),
     item_id: int,
-    item_in: ItemUpdate
+    item_in: ItemUpdate,
+    if_unmodified_since: Optional[str] = Header(default=None, alias="If-Unmodified-Since"),
 ) -> Any:
     """
     修改物品属性或挪动其当前位置（支持移入新位置或更换常驻地）。
     """
     try:
-        return item_service.update_item(db, item_id=item_id, obj_in=item_in, family_id=family_id)
+        expected_updated_at = _parse_optional_datetime(if_unmodified_since)
+        return item_service.update_item(
+            db,
+            item_id=item_id,
+            obj_in=item_in,
+            family_id=family_id,
+            expected_updated_at=expected_updated_at,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -142,6 +238,19 @@ def delete_item(
         return item_service.delete_item(db, item_id=item_id, family_id=family_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+def _parse_optional_datetime(value: Optional[str]) -> Optional[datetime]:
+    """
+    解析客户端版本时间；缺失时保持旧客户端兼容。
+    """
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(tz=None).replace(tzinfo=None)
+    return parsed
 
 
 @router.post("/{item_id}/go-home", response_model=ItemResponse)

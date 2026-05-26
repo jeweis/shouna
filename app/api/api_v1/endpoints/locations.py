@@ -1,8 +1,11 @@
-from typing import Any, List
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Any, List, Optional
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.api import deps
+from app.repositories.idempotency_record import idempotency_repo
 from app.services.location_service import location_service
 from app.repositories.location import location_repo
 from app.repositories.item import item_repo
@@ -22,14 +25,28 @@ def create_location(
     *,
     db: Session = Depends(deps.get_db),
     family_id: int = Depends(deps.get_current_family),
-    location_in: LocationCreate
+    location_in: LocationCreate,
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
     """
     创建一个新的收纳空间，支持嵌套。
     """
     try:
+        if idempotency_key:
+            record = idempotency_repo.get(
+                db,
+                family_id=family_id,
+                operation="create_location",
+                key=idempotency_key,
+            )
+            if record:
+                return JSONResponse(
+                    status_code=record.status_code,
+                    content=record.response_body,
+                )
+
         location = location_service.create_location(db, obj_in=location_in, family_id=family_id)
-        return {
+        response_body = jsonable_encoder({
             "id": location.id,
             "name": location.name,
             "parent_id": location.parent_id,
@@ -38,7 +55,17 @@ def create_location(
             "location_path": location_repo.get_ancestor_path(
                 db, location_id=location.id
             ),
-        }
+        })
+        if idempotency_key:
+            idempotency_repo.create(
+                db,
+                family_id=family_id,
+                operation="create_location",
+                key=idempotency_key,
+                status_code=status.HTTP_201_CREATED,
+                response_body=response_body,
+            )
+        return response_body
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -1,9 +1,11 @@
+from datetime import datetime
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from app.repositories.item import item_repo
 from app.repositories.location import location_repo
 from app.models.item import Item
 from app.schemas.item import ItemCreate, ItemUpdate
+from app.services.item_photo_service import item_photo_service
 
 class ItemService:
     def create_item(self, db: Session, *, obj_in: ItemCreate, family_id: int) -> Item:
@@ -24,7 +26,13 @@ class ItemService:
         return item_repo.create_in_family(db, obj_in=obj_in, family_id=family_id)
 
     def update_item(
-        self, db: Session, *, item_id: int, obj_in: ItemUpdate, family_id: int
+        self,
+        db: Session,
+        *,
+        item_id: int,
+        obj_in: ItemUpdate,
+        family_id: int,
+        expected_updated_at: Optional[datetime] = None,
     ) -> Item:
         """
         更新物品，包括位置调整校验
@@ -32,6 +40,8 @@ class ItemService:
         db_obj = item_repo.get(db, id=item_id)
         if not db_obj or db_obj.family_id != family_id:
             raise ValueError("物品不存在或越权访问")
+        if expected_updated_at is not None and db_obj.updated_at > expected_updated_at:
+            raise RuntimeError("服务端记录已更新，请先刷新后再保存")
 
         # 校验新存放位置
         if obj_in.location_id is not None:
@@ -45,7 +55,9 @@ class ItemService:
             if not home_loc or home_loc.family_id != family_id:
                 raise ValueError("新常驻位置非法")
 
-        return item_repo.update(db, db_obj=db_obj, obj_in=obj_in)
+        update_data = obj_in.model_dump(exclude_unset=True)
+        update_data.pop("photo_url", None)
+        return item_repo.update(db, db_obj=db_obj, obj_in=update_data)
 
     def go_home(self, db: Session, *, item_id: int, family_id: int) -> Item:
         """
@@ -68,6 +80,7 @@ class ItemService:
         if not db_obj or db_obj.family_id != family_id:
             raise ValueError("物品不存在或越权访问")
 
+        item_photo_service.delete_photos_for_item(db, item_id=item_id, family_id=family_id)
         return item_repo.remove(db, id=item_id)
 
     def get_item(self, db: Session, *, item_id: int, family_id: int) -> Item:

@@ -14,6 +14,7 @@ class Family(Base):
     members = relationship("FamilyMember", back_populates="family", cascade="all, delete-orphan")
     locations = relationship("Location", back_populates="family", cascade="all, delete-orphan")
     items = relationship("Item", back_populates="family", cascade="all, delete-orphan")
+    item_photos = relationship("ItemPhoto", back_populates="family", cascade="all, delete-orphan")
 
 
 class FamilyMember(Base):

@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel, ConfigDict, Field
+from app.schemas.item_photo import ItemPhotoResponse
 
 class ItemBase(BaseModel):
     name: str
@@ -30,6 +31,7 @@ class ItemResponse(ItemBase):
     family_id: int
     created_at: datetime
     updated_at: datetime
+    photos: List[ItemPhotoResponse] = Field(default_factory=list)
 
 class ItemCreateResponse(BaseModel):
     item: ItemResponse

@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     AI_BASE_URL: Optional[str] = None
     AI_MODEL: Optional[str] = None
 
+    # 图片存储配置。先使用本地文件系统，后续可在 StorageService 层替换为对象存储。
+    STORAGE_PROVIDER: str = "local"
+    LOCAL_STORAGE_ROOT: str = "./uploads"
+    MAX_PHOTO_UPLOAD_BYTES: int = 5 * 1024 * 1024
+    ALLOWED_PHOTO_MIME_TYPES: str = "image/jpeg,image/png,image/webp"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -41,5 +47,15 @@ class Settings(BaseSettings):
         if len(self.SECRET_KEY.encode("utf-8")) < 32:
             raise ValueError("生产环境 SECRET_KEY 长度必须至少 32 字节")
         return self
+
+    def allowed_photo_mime_types(self) -> set[str]:
+        """
+        返回允许上传的图片 MIME 类型集合。
+        """
+        return {
+            mime_type.strip()
+            for mime_type in self.ALLOWED_PHOTO_MIME_TYPES.split(",")
+            if mime_type.strip()
+        }
 
 settings = Settings()
