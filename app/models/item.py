@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, Float, Integer, String, Text, DateTime, ForeignKey, JSON
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -13,6 +13,14 @@ class Item(Base):
     # JSON 类型在 SQLite 中底层映射为 Text (支持 JSON 运算符)，在 PostgreSQL 中映射为 JSON/JSONB
     tags = Column(JSON, default=list, nullable=False)
     photo_url = Column(String, nullable=True)
+    locator_hint = Column(Text, nullable=True)
+    marker_x = Column(Float, nullable=True)
+    marker_y = Column(Float, nullable=True)
+    item_status = Column(String, default="normal", nullable=False)
+    held_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    held_at = Column(DateTime, nullable=True)
+    hold_note = Column(Text, nullable=True)
+    last_location_id = Column(Integer, ForeignKey("locations.id", ondelete="SET NULL"), nullable=True)
 
     # 常用常驻空间 (用于一键归位功能)
     home_location_id = Column(Integer, ForeignKey("locations.id", ondelete="SET NULL"), nullable=True)
@@ -29,5 +37,13 @@ class Item(Base):
     # 关系属性
     location = relationship("Location", back_populates="items", foreign_keys=[location_id])
     home_location = relationship("Location", foreign_keys=[home_location_id])
+    last_location = relationship("Location", foreign_keys=[last_location_id])
+    held_by_user = relationship("User", foreign_keys=[held_by_user_id])
     family = relationship("Family", back_populates="items")
     photos = relationship("ItemPhoto", back_populates="item", cascade="all, delete-orphan")
+
+    @property
+    def held_by_user_email(self) -> str | None:
+        if not self.held_by_user:
+            return None
+        return self.held_by_user.email

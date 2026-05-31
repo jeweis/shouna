@@ -1,16 +1,17 @@
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, status, UploadFile, File
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.api import deps
+from app.models.user import User
 from app.services.item_service import item_service
 from app.repositories.item import item_repo
 from app.repositories.idempotency_record import idempotency_repo
 from app.repositories.location import location_repo
-from app.schemas.item import ItemCreate, ItemCreateResponse, ItemUpdate, ItemResponse
+from app.schemas.item import ItemCreate, ItemCreateResponse, ItemHold, ItemPlace, ItemUpdate, ItemResponse
 from app.schemas.item_photo import ItemPhotoResponse
 from app.core.ai_client import get_ai_client
 from app.services.item_photo_service import item_photo_service
@@ -240,6 +241,137 @@ def delete_item(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/{item_id}/hold", response_model=ItemResponse)
+def hold_item(
+    *,
+    db: Session = Depends(deps.get_db),
+    family_id: int = Depends(deps.get_current_family),
+    current_user: User = Depends(deps.get_current_user),
+    item_id: int,
+    item_in: ItemHold,
+    if_unmodified_since: Optional[str] = Header(default=None, alias="If-Unmodified-Since"),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+) -> Any:
+    """
+    标记物品被当前用户临时拿着，保留拿走前位置。
+    """
+    try:
+        return _run_idempotent_item_action(
+            db=db,
+            family_id=family_id,
+            operation=f"hold_item:{item_id}",
+            idempotency_key=idempotency_key,
+            action=lambda: item_service.hold_item(
+                db,
+                item_id=item_id,
+                family_id=family_id,
+                user_id=current_user.id,
+                hold_note=item_in.hold_note,
+                expected_updated_at=_parse_optional_datetime(if_unmodified_since),
+            ),
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{item_id}/place", response_model=ItemResponse)
+def place_item(
+    *,
+    db: Session = Depends(deps.get_db),
+    family_id: int = Depends(deps.get_current_family),
+    item_id: int,
+    item_in: ItemPlace,
+    if_unmodified_since: Optional[str] = Header(default=None, alias="If-Unmodified-Since"),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+) -> Any:
+    """
+    将物品记录到新的家庭内位置，可选设为默认位置。
+    """
+    try:
+        return _run_idempotent_item_action(
+            db=db,
+            family_id=family_id,
+            operation=f"place_item:{item_id}",
+            idempotency_key=idempotency_key,
+            action=lambda: item_service.place_item(
+                db,
+                item_id=item_id,
+                family_id=family_id,
+                location_id=item_in.location_id,
+                set_as_home=item_in.set_as_home,
+                expected_updated_at=_parse_optional_datetime(if_unmodified_since),
+            ),
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{item_id}/return-home", response_model=ItemResponse)
+def return_home(
+    *,
+    db: Session = Depends(deps.get_db),
+    family_id: int = Depends(deps.get_current_family),
+    item_id: int,
+    if_unmodified_since: Optional[str] = Header(default=None, alias="If-Unmodified-Since"),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+) -> Any:
+    """
+    将临时拿着或不在默认位置的物品放回默认位置。
+    """
+    try:
+        return _run_idempotent_item_action(
+            db=db,
+            family_id=family_id,
+            operation=f"return_item_home:{item_id}",
+            idempotency_key=idempotency_key,
+            action=lambda: item_service.return_home(
+                db,
+                item_id=item_id,
+                family_id=family_id,
+                expected_updated_at=_parse_optional_datetime(if_unmodified_since),
+            ),
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{item_id}/mark-unknown", response_model=ItemResponse)
+def mark_unknown(
+    *,
+    db: Session = Depends(deps.get_db),
+    family_id: int = Depends(deps.get_current_family),
+    item_id: int,
+    if_unmodified_since: Optional[str] = Header(default=None, alias="If-Unmodified-Since"),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+) -> Any:
+    """
+    标记物品位置待确认，保留上次记录位置。
+    """
+    try:
+        return _run_idempotent_item_action(
+            db=db,
+            family_id=family_id,
+            operation=f"mark_item_unknown:{item_id}",
+            idempotency_key=idempotency_key,
+            action=lambda: item_service.mark_unknown(
+                db,
+                item_id=item_id,
+                family_id=family_id,
+                expected_updated_at=_parse_optional_datetime(if_unmodified_since),
+            ),
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 def _parse_optional_datetime(value: Optional[str]) -> Optional[datetime]:
     """
     解析客户端版本时间；缺失时保持旧客户端兼容。
@@ -253,17 +385,63 @@ def _parse_optional_datetime(value: Optional[str]) -> Optional[datetime]:
     return parsed
 
 
+def _run_idempotent_item_action(
+    *,
+    db: Session,
+    family_id: int,
+    operation: str,
+    idempotency_key: Optional[str],
+    action: Callable[[], Any],
+) -> Any:
+    if idempotency_key:
+        record = idempotency_repo.get(
+            db,
+            family_id=family_id,
+            operation=operation,
+            key=idempotency_key,
+        )
+        if record:
+            return JSONResponse(
+                status_code=record.status_code,
+                content=record.response_body,
+            )
+
+    result = action()
+    response_body = jsonable_encoder(ItemResponse.model_validate(result))
+    if idempotency_key:
+        idempotency_repo.create(
+            db,
+            family_id=family_id,
+            operation=operation,
+            key=idempotency_key,
+            status_code=status.HTTP_200_OK,
+            response_body=response_body,
+        )
+    return response_body
+
+
 @router.post("/{item_id}/go-home", response_model=ItemResponse)
 def item_go_home(
     *,
     db: Session = Depends(deps.get_db),
     family_id: int = Depends(deps.get_current_family),
-    item_id: int
+    item_id: int,
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ) -> Any:
     """
     一键归位功能：将临时摆放的物品快速移回设定的常用常驻地。
     """
     try:
-        return item_service.go_home(db, item_id=item_id, family_id=family_id)
+        return _run_idempotent_item_action(
+            db=db,
+            family_id=family_id,
+            operation=f"go_home:{item_id}",
+            idempotency_key=idempotency_key,
+            action=lambda: item_service.go_home(
+                db,
+                item_id=item_id,
+                family_id=family_id,
+            ),
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

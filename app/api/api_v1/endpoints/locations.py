@@ -1,5 +1,5 @@
 from typing import Any, List, Optional
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -17,6 +17,8 @@ from app.schemas.location import (
     LocationTreeNode,
 )
 from app.schemas.item import ItemResponse
+from app.schemas.location_photo import LocationPhotoResponse
+from app.services.location_photo_service import location_photo_service
 
 router = APIRouter()
 
@@ -50,6 +52,11 @@ def create_location(
             "id": location.id,
             "name": location.name,
             "parent_id": location.parent_id,
+            "relative_position": location.relative_position,
+            "locator_hint": location.locator_hint,
+            "locator_photo_id": location.locator_photo_id,
+            "marker_x": location.marker_x,
+            "marker_y": location.marker_y,
             "family_id": location.family_id,
             "created_at": location.created_at,
             "location_path": location_repo.get_ancestor_path(
@@ -96,6 +103,38 @@ def get_location(
     if not loc or loc.family_id != family_id:
         raise HTTPException(status_code=404, detail="空间位置不存在")
     return loc
+
+
+@router.post(
+    "/{location_id}/photos",
+    response_model=LocationPhotoResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_location_photo(
+    *,
+    db: Session = Depends(deps.get_db),
+    family_id: int = Depends(deps.get_current_family),
+    location_id: int,
+    file: UploadFile = File(...),
+) -> Any:
+    """
+    为当前家庭的空间上传定位照片，并设为该空间当前定位照片。
+    """
+    try:
+        content = await file.read()
+        return location_photo_service.create_photo(
+            db,
+            location_id=location_id,
+            family_id=family_id,
+            filename=file.filename or "photo",
+            mime_type=file.content_type or "",
+            content=content,
+        )
+    except ValueError as e:
+        error_message = str(e)
+        if "不存在或越权访问" in error_message:
+            raise HTTPException(status_code=404, detail=error_message)
+        raise HTTPException(status_code=400, detail=error_message)
 
 
 @router.put("/{location_id}", response_model=LocationResponse)

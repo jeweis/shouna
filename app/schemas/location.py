@@ -5,6 +5,11 @@ from pydantic import BaseModel, ConfigDict, Field
 class LocationBase(BaseModel):
     name: str
     parent_id: Optional[int] = None
+    relative_position: Optional[str] = None
+    locator_hint: Optional[str] = None
+    locator_photo_id: Optional[int] = None
+    marker_x: Optional[float] = Field(default=None, ge=0, le=1)
+    marker_y: Optional[float] = Field(default=None, ge=0, le=1)
 
 class LocationCreate(LocationBase):
     pass
@@ -12,6 +17,11 @@ class LocationCreate(LocationBase):
 class LocationUpdate(BaseModel):
     name: Optional[str] = None
     parent_id: Optional[int] = None
+    relative_position: Optional[str] = None
+    locator_hint: Optional[str] = None
+    locator_photo_id: Optional[int] = None
+    marker_x: Optional[float] = Field(default=None, ge=0, le=1)
+    marker_y: Optional[float] = Field(default=None, ge=0, le=1)
 
 class LocationResponse(LocationBase):
     model_config = ConfigDict(from_attributes=True)

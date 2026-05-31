@@ -50,13 +50,31 @@ class LocationRepository(BaseRepository[Location, LocationCreate, LocationUpdate
         使用 SQLAlchemy CTE 递归查询获取从根节点到当前节点路径的面包屑列表
         """
         # 1. 基础部分：当前节点
-        base_query = select(self.model.id, self.model.name, self.model.parent_id).where(self.model.id == location_id)
+        base_query = select(
+            self.model.id,
+            self.model.name,
+            self.model.parent_id,
+            self.model.relative_position,
+            self.model.locator_hint,
+            self.model.locator_photo_id,
+            self.model.marker_x,
+            self.model.marker_y,
+        ).where(self.model.id == location_id)
 
         # 2. 递归声明 CTE
         cte_query = base_query.cte(name="ancestors", recursive=True)
 
         # 3. 递归部分：向上联合查询父节点
-        recursive_part = select(self.model.id, self.model.name, self.model.parent_id).join(
+        recursive_part = select(
+            self.model.id,
+            self.model.name,
+            self.model.parent_id,
+            self.model.relative_position,
+            self.model.locator_hint,
+            self.model.locator_photo_id,
+            self.model.marker_x,
+            self.model.marker_y,
+        ).join(
             cte_query,
             self.model.id == cte_query.c.parent_id
         )
@@ -65,10 +83,31 @@ class LocationRepository(BaseRepository[Location, LocationCreate, LocationUpdate
         recursive_cte = cte_query.union_all(recursive_part)
 
         # 5. 执行查询
-        results = db.execute(select(recursive_cte.c.id, recursive_cte.c.name)).all()
+        results = db.execute(
+            select(
+                recursive_cte.c.id,
+                recursive_cte.c.name,
+                recursive_cte.c.relative_position,
+                recursive_cte.c.locator_hint,
+                recursive_cte.c.locator_photo_id,
+                recursive_cte.c.marker_x,
+                recursive_cte.c.marker_y,
+            )
+        ).all()
 
         # 6. 将结果从底向上还原，我们需要反转它以得到“从根节点到叶节点”的顺序
-        path = [{"id": r[0], "name": r[1]} for r in results]
+        path = [
+            {
+                "id": r[0],
+                "name": r[1],
+                "relative_position": r[2],
+                "locator_hint": r[3],
+                "locator_photo_id": r[4],
+                "marker_x": r[5],
+                "marker_y": r[6],
+            }
+            for r in results
+        ]
         path.reverse()
         return path
 
@@ -79,7 +118,12 @@ class LocationRepository(BaseRepository[Location, LocationCreate, LocationUpdate
         db_obj = Location(
             name=obj_in.name,
             parent_id=obj_in.parent_id,
-            family_id=family_id
+            family_id=family_id,
+            relative_position=obj_in.relative_position,
+            locator_hint=obj_in.locator_hint,
+            locator_photo_id=obj_in.locator_photo_id,
+            marker_x=obj_in.marker_x,
+            marker_y=obj_in.marker_y,
         )
         db.add(db_obj)
         db.commit()

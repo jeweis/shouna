@@ -394,6 +394,295 @@ def test_create_location_idempotency_key_does_not_duplicate(client):
     assert [location["name"] for location in tree_resp.json()] == ["阳台"]
 
 
+def test_spatial_metadata_round_trips_on_locations_items_search_and_paths(client):
+    token, family_id = register_and_login(client, "spatial@example.com", "找物家")
+    headers = auth_headers(token, family_id)
+
+    root_resp = client.post(
+        "/api/v1/locations/",
+        json={
+            "name": "客厅",
+            "locator_hint": "从门口进入后正前方",
+            "marker_x": 0.5,
+            "marker_y": 0.2,
+        },
+        headers=headers,
+    )
+    assert root_resp.status_code == 201
+    root = root_resp.json()
+    assert root["locator_hint"] == "从门口进入后正前方"
+    assert root["marker_x"] == 0.5
+    assert root["marker_y"] == 0.2
+
+    child_resp = client.post(
+        "/api/v1/locations/",
+        json={
+            "name": "电视柜",
+            "parent_id": root["id"],
+            "relative_position": "客厅左侧靠墙",
+            "locator_hint": "第二层抽屉",
+            "locator_photo_id": 7,
+            "marker_x": 0.32,
+            "marker_y": 0.68,
+        },
+        headers=headers,
+    )
+    assert child_resp.status_code == 201
+    child = child_resp.json()
+    child_id = child["id"]
+    assert child["relative_position"] == "客厅左侧靠墙"
+    assert child["locator_hint"] == "第二层抽屉"
+    assert child["locator_photo_id"] == 7
+    assert child["marker_x"] == 0.32
+    assert child["marker_y"] == 0.68
+    assert child["location_path"][-1]["locator_hint"] == "第二层抽屉"
+
+    update_location_resp = client.put(
+        f"/api/v1/locations/{child_id}",
+        json={"locator_hint": "第二层右侧收纳盒"},
+        headers=headers,
+    )
+    assert update_location_resp.status_code == 200
+    assert update_location_resp.json()["locator_hint"] == "第二层右侧收纳盒"
+
+    tree_resp = client.get("/api/v1/locations/tree", headers=headers)
+    assert tree_resp.status_code == 200
+    tree_child = tree_resp.json()[0]["sub_locations"][0]
+    assert tree_child["relative_position"] == "客厅左侧靠墙"
+    assert tree_child["locator_hint"] == "第二层右侧收纳盒"
+    assert tree_child["marker_x"] == 0.32
+
+    path_resp = client.get(f"/api/v1/locations/{child_id}/path", headers=headers)
+    assert path_resp.status_code == 200
+    assert path_resp.json()[-1]["locator_hint"] == "第二层右侧收纳盒"
+
+    item_resp = client.post(
+        "/api/v1/items/",
+        json={
+            "name": "遥控器",
+            "quantity": 1,
+            "tags": ["电器"],
+            "location_id": child_id,
+            "locator_hint": "抽屉内透明盒最上面",
+            "marker_x": 0.44,
+            "marker_y": 0.61,
+        },
+        headers=headers,
+    )
+    assert item_resp.status_code == 201
+    item = item_resp.json()["item"]
+    item_id = item["id"]
+    assert item["locator_hint"] == "抽屉内透明盒最上面"
+    assert item["marker_x"] == 0.44
+    assert item["marker_y"] == 0.61
+
+    search_resp = client.get("/api/v1/search/", params={"q": "遥控"}, headers=headers)
+    assert search_resp.status_code == 200
+    search_item = search_resp.json()[0]["item"]
+    assert search_item["locator_hint"] == "抽屉内透明盒最上面"
+    assert search_item["marker_x"] == 0.44
+
+    other_location_resp = client.post(
+        "/api/v1/locations/",
+        json={"name": "书房"},
+        headers=headers,
+    )
+    assert other_location_resp.status_code == 201
+    move_resp = client.put(
+        f"/api/v1/items/{item_id}",
+        json={"location_id": other_location_resp.json()["id"]},
+        headers=headers,
+    )
+    assert move_resp.status_code == 200
+    moved_item = move_resp.json()
+    assert moved_item["location_id"] == other_location_resp.json()["id"]
+    assert moved_item["marker_x"] is None
+    assert moved_item["marker_y"] is None
+    assert moved_item["locator_hint"] == "抽屉内透明盒最上面"
+
+    remark_resp = client.put(
+        f"/api/v1/items/{item_id}",
+        json={"marker_x": 0.12, "marker_y": 0.9, "locator_hint": "书桌左侧托盘"},
+        headers=headers,
+    )
+    assert remark_resp.status_code == 200
+    assert remark_resp.json()["marker_x"] == 0.12
+    assert remark_resp.json()["marker_y"] == 0.9
+    assert remark_resp.json()["locator_hint"] == "书桌左侧托盘"
+
+
+def test_lightweight_item_flow_hold_return_move_and_unknown(client):
+    token, family_id = register_and_login(client, "flow@example.com", "流转家")
+    headers = auth_headers(token, family_id)
+
+    home_resp = client.post("/api/v1/locations/", json={"name": "书房抽屉"}, headers=headers)
+    assert home_resp.status_code == 201
+    home_id = home_resp.json()["id"]
+    desk_resp = client.post("/api/v1/locations/", json={"name": "客厅茶几"}, headers=headers)
+    assert desk_resp.status_code == 201
+    desk_id = desk_resp.json()["id"]
+
+    item_resp = client.post(
+        "/api/v1/items/",
+        json={
+            "name": "剪刀",
+            "quantity": 1,
+            "location_id": home_id,
+            "home_location_id": home_id,
+        },
+        headers=headers,
+    )
+    assert item_resp.status_code == 201
+    item = item_resp.json()["item"]
+    item_id = item["id"]
+    assert item["item_status"] == "normal"
+    assert item["held_by_user_id"] is None
+    assert item["last_location_id"] is None
+
+    hold_resp = client.post(
+        f"/api/v1/items/{item_id}/hold",
+        json={"hold_note": "放包里"},
+        headers=headers,
+    )
+    assert hold_resp.status_code == 200
+    held = hold_resp.json()
+    assert held["item_status"] == "holding"
+    assert held["held_by_user_id"] is not None
+    assert held["held_by_user_email"] == "flow@example.com"
+    assert held["held_at"] is not None
+    assert held["hold_note"] == "放包里"
+    assert held["last_location_id"] == home_id
+    assert held["location_id"] == home_id
+
+    idem_headers = {**headers, "Idempotency-Key": "hold-item-10-once"}
+    first_idem_hold = client.post(
+        f"/api/v1/items/{item_id}/hold",
+        json={"hold_note": "幂等拿走"},
+        headers=idem_headers,
+    )
+    second_idem_hold = client.post(
+        f"/api/v1/items/{item_id}/hold",
+        json={"hold_note": "幂等拿走"},
+        headers=idem_headers,
+    )
+    assert first_idem_hold.status_code == 200
+    assert second_idem_hold.status_code == 200
+    assert second_idem_hold.json()["held_at"] == first_idem_hold.json()["held_at"]
+
+    search_resp = client.get("/api/v1/search/", params={"q": "剪刀"}, headers=headers)
+    assert search_resp.status_code == 200
+    search_item = search_resp.json()[0]["item"]
+    assert search_item["item_status"] == "holding"
+    assert search_item["held_by_user_email"] == "flow@example.com"
+    assert [node["name"] for node in search_resp.json()[0]["location_path"]] == ["书房抽屉"]
+
+    return_resp = client.post(f"/api/v1/items/{item_id}/return-home", headers=headers)
+    assert return_resp.status_code == 200
+    returned = return_resp.json()
+    assert returned["item_status"] == "normal"
+    assert returned["location_id"] == home_id
+    assert returned["held_by_user_id"] is None
+    assert returned["hold_note"] is None
+
+    move_resp = client.post(
+        f"/api/v1/items/{item_id}/place",
+        json={"location_id": desk_id, "set_as_home": False},
+        headers=headers,
+    )
+    assert move_resp.status_code == 200
+    moved = move_resp.json()
+    assert moved["item_status"] == "normal"
+    assert moved["location_id"] == desk_id
+    assert moved["home_location_id"] == home_id
+
+    go_home_resp = client.post(f"/api/v1/items/{item_id}/go-home", headers=headers)
+    assert go_home_resp.status_code == 200
+    assert go_home_resp.json()["location_id"] == home_id
+
+    already_home_resp = client.post(f"/api/v1/items/{item_id}/go-home", headers=headers)
+    assert already_home_resp.status_code == 400
+    assert already_home_resp.json()["detail"] == "物品已在默认位置"
+
+    unknown_resp = client.post(f"/api/v1/items/{item_id}/mark-unknown", headers=headers)
+    assert unknown_resp.status_code == 200
+    unknown = unknown_resp.json()
+    assert unknown["item_status"] == "unknown"
+    assert unknown["last_location_id"] == home_id
+
+    record_resp = client.post(
+        f"/api/v1/items/{item_id}/place",
+        json={"location_id": desk_id, "set_as_home": True},
+        headers=headers,
+    )
+    assert record_resp.status_code == 200
+    recorded = record_resp.json()
+    assert recorded["item_status"] == "normal"
+    assert recorded["location_id"] == desk_id
+    assert recorded["home_location_id"] == desk_id
+
+
+def test_location_photo_upload_read_delete_and_family_isolation(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "LOCAL_STORAGE_ROOT", str(tmp_path / "uploads"), raising=False)
+
+    token_a, family_a = register_and_login(client, "location-photo-a@example.com", "空间图 A 家")
+    token_b, family_b = register_and_login(client, "location-photo-b@example.com", "空间图 B 家")
+    headers_a = auth_headers(token_a, family_a)
+    headers_b = auth_headers(token_b, family_b)
+
+    location_resp = client.post("/api/v1/locations/", json={"name": "储物间"}, headers=headers_a)
+    assert location_resp.status_code == 201
+    location_id = location_resp.json()["id"]
+
+    image_bytes = b"\xff\xd8location-photo"
+    upload_resp = client.post(
+        f"/api/v1/locations/{location_id}/photos",
+        files={"file": ("space.jpg", image_bytes, "image/jpeg")},
+        headers=headers_a,
+    )
+    assert upload_resp.status_code == 201
+    photo = upload_resp.json()
+    photo_id = photo["id"]
+    assert photo["location_id"] == location_id
+    assert photo["family_id"] == family_a
+    assert photo["storage_provider"] == "local"
+    assert photo["storage_key"].startswith(f"locations/{family_a}/{location_id}/")
+    assert photo["mime_type"] == "image/jpeg"
+    assert photo["size_bytes"] == len(image_bytes)
+
+    stored_file = Path(settings.LOCAL_STORAGE_ROOT) / photo["storage_key"]
+    assert stored_file.exists()
+
+    updated_location = client.get(f"/api/v1/locations/{location_id}", headers=headers_a)
+    assert updated_location.status_code == 200
+    assert updated_location.json()["locator_photo_id"] == photo_id
+
+    content_resp = client.get(f"/api/v1/location-photos/{photo_id}/content", headers=headers_a)
+    assert content_resp.status_code == 200
+    assert content_resp.headers["content-type"].startswith("image/jpeg")
+    assert content_resp.content == image_bytes
+
+    cross_family_upload = client.post(
+        f"/api/v1/locations/{location_id}/photos",
+        files={"file": ("space.jpg", image_bytes, "image/jpeg")},
+        headers=headers_b,
+    )
+    assert cross_family_upload.status_code in {403, 404}
+
+    cross_family_read = client.get(f"/api/v1/location-photos/{photo_id}/content", headers=headers_b)
+    assert cross_family_read.status_code in {403, 404}
+
+    delete_resp = client.delete(f"/api/v1/location-photos/{photo_id}", headers=headers_a)
+    assert delete_resp.status_code == 200
+    assert delete_resp.json()["id"] == photo_id
+    assert not stored_file.exists()
+
+    missing_content = client.get(f"/api/v1/location-photos/{photo_id}/content", headers=headers_a)
+    assert missing_content.status_code == 404
+    deleted_location = client.get(f"/api/v1/locations/{location_id}", headers=headers_a)
+    assert deleted_location.status_code == 200
+    assert deleted_location.json()["locator_photo_id"] is None
+
+
 def test_update_item_rejects_stale_offline_version(client):
     token, family_id = register_and_login(client, "conflict@example.com", "冲突家")
     headers = auth_headers(token, family_id)

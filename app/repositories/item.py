@@ -29,6 +29,10 @@ class ItemRepository(BaseRepository[Item, ItemCreate, ItemUpdate]):
             quantity=obj_in.quantity,
             tags=obj_in.tags or [],
             photo_url=None,
+            locator_hint=obj_in.locator_hint,
+            marker_x=obj_in.marker_x,
+            marker_y=obj_in.marker_y,
+            item_status="normal",
             location_id=obj_in.location_id,
             home_location_id=obj_in.home_location_id,
             family_id=family_id

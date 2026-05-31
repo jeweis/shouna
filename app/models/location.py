@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Column, Float, Integer, String, Text, DateTime, ForeignKey
 from sqlalchemy.orm import relationship, backref
 from app.core.database import Base
 
@@ -12,6 +12,11 @@ class Location(Base):
     parent_id = Column(Integer, ForeignKey("locations.id", ondelete="CASCADE"), nullable=True, index=True)
     family_id = Column(Integer, ForeignKey("families.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    relative_position = Column(String, nullable=True)
+    locator_hint = Column(Text, nullable=True)
+    locator_photo_id = Column(Integer, nullable=True)
+    marker_x = Column(Float, nullable=True)
+    marker_y = Column(Float, nullable=True)
 
     # 关系属性：自关联树形结构
     # remote_side=[id] 表明这是一个自关联，由 parent 指向自身的 id。
@@ -23,6 +28,12 @@ class Location(Base):
     )
 
     family = relationship("Family", back_populates="locations")
+    locator_photos = relationship(
+        "LocationPhoto",
+        back_populates="location",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     items = relationship(
         "Item",
         back_populates="location",
