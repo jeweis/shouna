@@ -19,6 +19,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
+    # 注意：新增带 NOT NULL 的 item_status 列与移除其默认值必须分两个
+    # batch_alter_table 块执行。SQLite 的表重建是按"最终schema"一次性
+    # 计算 DDL 与数据搬迁的 INSERT 语句的：若在同一个块内既声明
+    # server_default="normal" 又随后清除该默认值，Alembic 会用"无默认值
+    # 的 NOT NULL"这个最终形态去搬迁旧数据，导致已有行因没有默认值可回填
+    # 而触发 NOT NULL 约束失败（IntegrityError）。先在带默认值的状态下
+    # 完成建列与回填，再单独清除默认值，才能让旧数据安全过渡。
     with op.batch_alter_table("items") as batch_op:
         batch_op.add_column(sa.Column("item_status", sa.String(), nullable=False, server_default="normal"))
         batch_op.add_column(sa.Column("held_by_user_id", sa.Integer(), nullable=True))
@@ -39,6 +46,8 @@ def upgrade() -> None:
             ["id"],
             ondelete="SET NULL",
         )
+
+    with op.batch_alter_table("items") as batch_op:
         batch_op.alter_column("item_status", server_default=None)
 
 
