@@ -81,3 +81,9 @@ docker run -d \
   -e AI_MODEL=claude-3-5-sonnet-latest \
   shouna-backend:latest
 ```
+
+---
+
+## 📄 开源协议
+
+本项目以 [MIT License](./LICENSE) 开源，欢迎在自己的设备（包括 NAS）上自由部署与二次开发。
