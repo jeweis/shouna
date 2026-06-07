@@ -42,11 +42,14 @@ class ItemRepository(BaseRepository[Item, ItemCreate, ItemUpdate]):
         db.refresh(db_obj)
         return db_obj
 
-    def global_search(self, db: Session, *, family_id: int, q: str) -> List[Item]:
+    def global_search(
+        self, db: Session, *, family_id: int, q: str, limit: int = 30
+    ) -> List[Item]:
         """
         全文模糊匹配名称、标签、描述以及所在空间的名称，限定在该家庭工作空间内
         """
         from app.models.location import Location
+        from app.repositories.location import location_repo
         like_q = f"%{q}%"
         direct_matches = db.query(self.model).join(
             Location, self.model.location_id == Location.id
@@ -60,19 +63,32 @@ class ItemRepository(BaseRepository[Item, ItemCreate, ItemUpdate]):
                 func.cast(self.model.tags, String).ilike(like_q),
                 Location.name.ilike(like_q)
             )
-        ).all()
+        ).order_by(self.model.id.asc()).limit(limit).all()
 
         matched_by_id = {item.id: item for item in direct_matches}
-        family_items = db.query(self.model).filter(self.model.family_id == family_id).all()
-        for item in family_items:
-            if item.id in matched_by_id:
-                continue
-            location = item.location
-            while location:
-                if q.lower() in location.name.lower():
-                    matched_by_id[item.id] = item
+        remaining = limit - len(matched_by_id)
+        if remaining <= 0:
+            return list(matched_by_id.values())
+
+        q_lower = q.lower()
+        locations = location_repo.get_all_family_locations(db, family_id=family_id)
+        locations_by_id = {location.id: location for location in locations}
+        matching_location_ids = []
+        for location in locations:
+            current = location
+            while current is not None:
+                if q_lower in current.name.lower():
+                    matching_location_ids.append(location.id)
                     break
-                location = location.parent
+                current = locations_by_id.get(current.parent_id)
+
+        if matching_location_ids:
+            path_matches = db.query(self.model).filter(
+                self.model.family_id == family_id,
+                self.model.location_id.in_(matching_location_ids),
+                ~self.model.id.in_(matched_by_id.keys()) if matched_by_id else True,
+            ).order_by(self.model.id.asc()).limit(remaining).all()
+            matched_by_id.update({item.id: item for item in path_matches})
         return list(matched_by_id.values())
 
 item_repo = ItemRepository(Item)

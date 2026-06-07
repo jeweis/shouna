@@ -216,6 +216,70 @@ def test_family_isolation_recursive_delete_search_and_ai_fallback(client):
     assert missing_item.status_code == 404
 
 
+def test_search_limit_paths_and_space_counts_scale(client):
+    token, family_id = register_and_login(client, "scale-search@example.com", "规模家")
+    headers = auth_headers(token, family_id)
+
+    root = client.post("/api/v1/locations/", json={"name": "仓库"}, headers=headers).json()
+    shelf = client.post(
+        "/api/v1/locations/",
+        json={"name": "货架", "parent_id": root["id"]},
+        headers=headers,
+    ).json()
+    box = client.post(
+        "/api/v1/locations/",
+        json={"name": "盒子", "parent_id": shelf["id"]},
+        headers=headers,
+    ).json()
+
+    for index in range(5):
+        resp = client.post(
+            "/api/v1/items/",
+            json={
+                "name": f"线缆 {index}",
+                "quantity": 1,
+                "tags": ["电子"],
+                "location_id": box["id"],
+                "home_location_id": box["id"],
+            },
+            headers=headers,
+        )
+        assert resp.status_code == 201
+    shelf_item = client.post(
+        "/api/v1/items/",
+        json={
+            "name": "备用夹子",
+            "quantity": 1,
+            "tags": [],
+            "location_id": shelf["id"],
+            "home_location_id": shelf["id"],
+        },
+        headers=headers,
+    )
+    assert shelf_item.status_code == 201
+
+    tree_resp = client.get("/api/v1/locations/tree", headers=headers)
+    assert tree_resp.status_code == 200
+    tree = tree_resp.json()[0]
+    assert tree["item_count"] == 6
+    assert tree["sub_locations"][0]["item_count"] == 6
+    assert tree["sub_locations"][0]["sub_locations"][0]["item_count"] == 5
+
+    search_resp = client.get(
+        "/api/v1/search/",
+        params={"q": "仓库", "limit": 3},
+        headers=headers,
+    )
+    assert search_resp.status_code == 200
+    results = search_resp.json()
+    assert len(results) == 3
+    assert [node["name"] for node in results[0]["location_path"]] == [
+        "仓库",
+        "货架",
+        "盒子",
+    ]
+
+
 def test_item_photo_upload_read_delete_and_family_isolation(client, tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "LOCAL_STORAGE_ROOT", str(tmp_path / "uploads"), raising=False)
 

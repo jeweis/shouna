@@ -84,11 +84,13 @@ class LocationService:
                 sub_locations=[]
             )
 
+        subtree_count_cache: Dict[int, int] = {}
         for loc in all_locations:
             nodes[loc.id].item_count = self._count_subtree_items(
                 loc,
                 children_by_parent=children_by_parent,
                 direct_item_counts=direct_item_counts,
+                subtree_count_cache=subtree_count_cache,
             )
 
         roots: List[LocationTreeNode] = []
@@ -116,14 +118,19 @@ class LocationService:
         *,
         children_by_parent: Dict[int, List[Location]],
         direct_item_counts: Dict[int, int],
+        subtree_count_cache: Dict[int, int],
     ) -> int:
+        if location.id in subtree_count_cache:
+            return subtree_count_cache[location.id]
         total = direct_item_counts.get(location.id, 0)
         for child in children_by_parent.get(location.id, []):
             total += self._count_subtree_items(
                 child,
                 children_by_parent=children_by_parent,
                 direct_item_counts=direct_item_counts,
+                subtree_count_cache=subtree_count_cache,
             )
+        subtree_count_cache[location.id] = total
         return total
 
 location_service = LocationService()

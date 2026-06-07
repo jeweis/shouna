@@ -111,6 +111,35 @@ class LocationRepository(BaseRepository[Location, LocationCreate, LocationUpdate
         path.reverse()
         return path
 
+    def get_paths_for_locations(
+        self, db: Session, *, family_id: int, location_ids: List[int]
+    ) -> dict[int, List[dict]]:
+        """
+        批量解析多个空间的祖先路径，避免搜索结果逐条执行递归查询。
+        """
+        if not location_ids:
+            return {}
+        locations = self.get_all_family_locations(db, family_id=family_id)
+        locations_by_id = {location.id: location for location in locations}
+        paths: dict[int, List[dict]] = {}
+        for location_id in location_ids:
+            path = []
+            current = locations_by_id.get(location_id)
+            while current is not None:
+                path.append({
+                    "id": current.id,
+                    "name": current.name,
+                    "relative_position": current.relative_position,
+                    "locator_hint": current.locator_hint,
+                    "locator_photo_id": current.locator_photo_id,
+                    "marker_x": current.marker_x,
+                    "marker_y": current.marker_y,
+                })
+                current = locations_by_id.get(current.parent_id)
+            path.reverse()
+            paths[location_id] = path
+        return paths
+
     def create_in_family(self, db: Session, *, obj_in: LocationCreate, family_id: int) -> Location:
         """
         在指定家庭创建空间

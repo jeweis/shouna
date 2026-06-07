@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # 图片存储配置。先使用本地文件系统，后续可在 StorageService 层替换为对象存储。
     STORAGE_PROVIDER: str = "local"
-    LOCAL_STORAGE_ROOT: str = "./uploads"
+    LOCAL_STORAGE_ROOT: str = "./data/uploads"
     MAX_PHOTO_UPLOAD_BYTES: int = 5 * 1024 * 1024
     ALLOWED_PHOTO_MIME_TYPES: str = "image/jpeg,image/png,image/webp"
 

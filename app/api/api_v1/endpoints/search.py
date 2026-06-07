@@ -19,7 +19,8 @@ def search(
     *,
     db: Session = Depends(deps.get_db),
     family_id: int = Depends(deps.get_current_family),
-    q: str = Query(..., description="要搜索的关键字")
+    q: str = Query(..., description="要搜索的关键字"),
+    limit: int = Query(30, ge=1, le=50, description="最大返回结果数"),
 ) -> Any:
     """
     全局物品智能检索：支持匹配物品名、描述、标签及所属空间名，并自动解析每件物品的空间面包屑路径。
@@ -28,15 +29,19 @@ def search(
         return []
 
     # 1. 查找匹配的物品
-    items = item_repo.global_search(db, family_id=family_id, q=q.strip())
+    items = item_repo.global_search(db, family_id=family_id, q=q.strip(), limit=limit)
 
-    # 2. 为每个物品递归解析面包屑路径
+    # 2. 批量解析面包屑路径，避免搜索结果逐条递归查询。
+    paths_by_location = location_repo.get_paths_for_locations(
+        db,
+        family_id=family_id,
+        location_ids=[item.location_id for item in items],
+    )
     results = []
     for item in items:
-        path = location_repo.get_ancestor_path(db, location_id=item.location_id)
         results.append({
             "item": item,
-            "location_path": path
+            "location_path": paths_by_location.get(item.location_id, [])
         })
 
     return results

@@ -43,8 +43,8 @@ Dockerfile 使用官方 `ghcr.io/astral-sh/uv` 构建镜像和 BuildKit 的缓�
 DOCKER_BUILDKIT=1 docker build -t shouna-backend:latest .
 ```
 
-### 2. 启动 Docker 容器 (推荐使用持久化数据卷挂载 SQLite)
-由于默认使用 SQLite 数据库，容器重启后数据默认会丢失。必须使用 `-v` 参数将主机的目录挂载到容器的 `/app/data`，并显式把 `DATABASE_URL` 指向该挂载路径。容器启动命令会先执行 `alembic upgrade head`，再启动 API 服务：
+### 2. 启动 Docker 容器 (推荐使用持久化数据卷挂载 SQLite 和上传图片)
+由于默认使用 SQLite 数据库和本地图片存储，容器重建后未挂载的数据会丢失。必须使用 `-v` 参数将主机目录挂载到容器的 `/app/data`，并显式把 `DATABASE_URL` 指向该挂载路径；默认图片上传目录为 `/app/data/uploads`。容器启动命令会先执行 `alembic upgrade head`，再启动 API 服务：
 
 ```bash
 docker run -d \
@@ -54,6 +54,8 @@ docker run -d \
   -e ENVIRONMENT=production \
   -e SECRET_KEY=change-to-a-long-random-secret-at-least-32-bytes \
   -e DATABASE_URL=sqlite:////app/data/shouna.db \
+  -e STORAGE_PROVIDER=local \
+  -e LOCAL_STORAGE_ROOT=/app/data/uploads \
   -e BACKEND_CORS_ORIGINS='["https://your-frontend.example.com"]' \
   -e AI_PROVIDER=openai \
   -e AI_API_KEY=sk-your-openai-api-key-here \
@@ -71,6 +73,8 @@ docker run -d \
   -e ENVIRONMENT=production \
   -e SECRET_KEY=change-to-a-long-random-secret-at-least-32-bytes \
   -e DATABASE_URL=postgresql+psycopg://user:password@host:5432/shounadb \
+  -e STORAGE_PROVIDER=local \
+  -e LOCAL_STORAGE_ROOT=/app/data/uploads \
   -e BACKEND_CORS_ORIGINS='["https://your-frontend.example.com"]' \
   -e AI_PROVIDER=anthropic \
   -e AI_API_KEY=sk-ant-your-anthropic-key-here \
